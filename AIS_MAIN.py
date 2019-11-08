@@ -226,6 +226,7 @@ if __name__ == '__main__':
                     nearby_aircrafts.remove(x)
 			# TODO - Search through JSON - if aircraft no longer exists then dump1090 has gotten rid of it and the lastSeen value wont increment through Aircraft.update() so this case will never be 				  reached
 
+            # TODO - Assign aircraft radius, calculate angle and distance between our aircraft and nearby, determine if they are within our radius, and then call method for situation cases
 
 
     except(KeyboardInterrupt, SystemExit):  # when you press ctrl+c
