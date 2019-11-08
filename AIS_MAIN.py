@@ -12,6 +12,20 @@ nearby_aircrafts = []
 
 locationHistory = []
 
+
+class GpsPoller(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        global gpsd  # bring it in scope
+        gpsd = gps(mode=WATCH_ENABLE)  # starting the stream of info
+        self.current_value = None
+        self.running = True  # setting the thread running to true
+
+    def run(self):
+        global gpsd
+        while gpsp.running:
+            gpsd.next()  # this will continue to loop and grab EACH set of gpsd info to clear the buffer
+
 class Location:
     lat = None
     lon = None
@@ -43,13 +57,13 @@ class Location:
         self.errorVertIN = errorVertVelIN
 
 
-class Aircraft:         # quick description -                               VAR TYPE
+class Aircraft:         # [quick description] -                             [VAR TYPE]
     hex = None          # hex for aircraft identifier ICAO -                STRING
     flight = None       # N-number reg for aircraft -                       STRING
     lat = None          # Latitude (should be decoded from CPR format) -    FLOAT
     lon = None          # Longitude (should be decoded from CPR format) -   FLOAT
     NUCp = None         # Navigation Uncertainty Category -                 INT
-    seen_pos: None      # Seconds since last position field update -        DOUBLE
+    seen_pos = None      # Seconds since last position field update -        DOUBLE
     altitude = None     # Altitude decoded from CPR -                       INT
     vertRate = None     # vertical climb rate -                             INT
     track = None        # unsure -                                          INT
@@ -79,12 +93,13 @@ class Aircraft:         # quick description -                               VAR 
         self.seen = seenIN
         self.rssi = rssiIN
 
-    def update(self, latIN, lonIN, NUCpIN, seen_posIN, altitudeIN, trackIN, speedIN, categoryIN, mlatIN, tisbIN, messagesIN, seenIN, rssiIN):
+    def update(self, latIN, lonIN, NUCpIN, seen_posIN, altitudeIN, vertRateIN, trackIN, speedIN, categoryIN, mlatIN, tisbIN, messagesIN, seenIN, rssiIN):
         self.lat = latIN
         self.lon = lonIN
         self.NUCp = NUCpIN
         self.seen_pos = seen_posIN
         self.altitude = altitudeIN
+        self.vertRate = vertRateIN
         self.track = trackIN
         self.speed = speedIN
         self.category = categoryIN
@@ -93,20 +108,6 @@ class Aircraft:         # quick description -                               VAR 
         self.messages = messagesIN
         self.seen = seenIN
         self.rssi = rssiIN
-
-
-class GpsPoller(threading.Thread):
-    def __init__(self):
-        threading.Thread.__init__(self)
-        global gpsd  # bring it in scope
-        gpsd = gps(mode=WATCH_ENABLE)  # starting the stream of info
-        self.current_value = None
-        self.running = True  # setting the thread running to true
-
-    def run(self):
-        global gpsd
-        while gpsp.running:
-            gpsd.next()  # this will continue to loop and grab EACH set of gpsd info to clear the buffer
 
 
 class JSONparser:
@@ -146,7 +147,7 @@ class JSONparser:
 
                 trackVal = None
                 if 'track' in p:
-                    trackVal = p['']
+                    trackVal = p['track']
 
                 velocity = None
                 if 'speed' in p:
@@ -187,23 +188,43 @@ if __name__ == '__main__':
             vel = gpsd.fix.speed
             head = gpsd.fix.track  # heading, degrees from true North (0 or 360 degrees), 90 degrees for East, ect.
             climbRate = gpsd.fix.climb  # climb (positive) or sink (negative) rate (m/s)
-            timeUTC = gpsd.utc  # Time in UTC
+           # timeUTC = gpsd.utc  # Time in UTC - NOT BEING USED
             errorLat = gpsd.fix.epy  # error estimate of latitude
             errorLong = gpsd.fix.epx  # error estimate of longitude
             errorHorVel = gpsd.fix.eps  # error estimate of speed
             errorVertVel = gpsd.fix.epc  # error estimate of climb/sink in meters per second (Vertical Velocity error)
-            errorHor = gpsd.fix.eph  # estimated horizontal error in meters
+           # errorHor = gpsd.fix.eph  # estimated horizontal error in meters - WEIRD ERROR
             errorVert = gpsd.fix.epv  # estimated vertical error in meters
-            FrameCount = 0
-            adsbMsgType = 0;  # used to tell what type of ads-b message to encode
-
-            locationHistory.append(Location(lat, lon, t, alt, vel, head, climbRate, errorLat, errorLong, errorHorVel, errorVertVel, errorHor, errorVert))
+			
+            print
+            print (' GPS reading')
+            print ('----------------------------------------')
+            print ('latitude    ' , gpsd.fix.latitude)
+            print ('longitude   ' , gpsd.fix.longitude)
+            print ('time utc    ' , gpsd.utc,' + ', gpsd.fix.time)
+            print ('altitude (m)' , gpsd.fix.altitude)
+            print ('eps         ' , gpsd.fix.eps) #speed error estimate (m/s), 95% confidence
+            print ('epx         ' , gpsd.fix.epx) #longitude error estimate (m), 95% confidence
+            print ('epy         ' , gpsd.fix.epy) #latitude error estimate (m), 95% confidence
+            print ('epv         ' , gpsd.fix.epv) #estimated vertical error (m), 95% confidence
+            print ('ept         ' , gpsd.fix.ept) #estimated timestamp error (% of a second), 95% confidence
+            print ('speed (m/s) ' , gpsd.fix.speed)
+            print ('climb       ' , gpsd.fix.climb) #climb (positive) or sink (negative) rate, (m/s)
+            print ('track       ' , gpsd.fix.track) #course over ground, degrees from true north
+            print ('mode        ' , gpsd.fix.mode) #NMEA mode (not sure what this represents)
+            print
+            print ('sats        ' , gpsd.satellites)
+ 
+            locationHistory.append(Location(lat, lon, t, alt, vel, head, climbRate, errorLat, errorLong, errorHorVel, errorVertVel, None, errorVert))
 
             if len(locationHistory) > 10:
                 locationHistory.pop(0)
 
-            # TODO - figure out how to track time for aircraft objects and remove after set period - or will dump1090 do that for me?
-            # if dump1090 automatically removes aircraft from the JSON then write method to scan nearby_aircraft and eliminate if does not exist in JSON anymore
+            JSONparser()
+            for x in nearby_aircrafts:
+                if x.seen >= 300:
+                    nearby_aircrafts.remove(x)
+			# TODO - Search through JSON - if aircraft no longer exists then dump1090 has gotten rid of it and the lastSeen value wont increment through Aircraft.update() so this case will never be 				  reached
 
 
 
