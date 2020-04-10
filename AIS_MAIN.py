@@ -5,6 +5,7 @@ import time
 import threading
 import math
 import json
+from geographiclib.geodesic import Geodesic
 
 gpsd = None  # set global variable to access gps
 
@@ -12,6 +13,12 @@ nearby_aircrafts = []
 
 locationHistory = []
 
+threats = []
+
+#TCAS set warning radius in meters
+warning_radius = 37040
+
+maneuver = None
 
 class GpsPoller(threading.Thread):
     def __init__(self):
@@ -63,7 +70,7 @@ class Aircraft:         # [quick description] -                             [VAR
     lat = None          # Latitude (should be decoded from CPR format) -    FLOAT
     lon = None          # Longitude (should be decoded from CPR format) -   FLOAT
     NUCp = None         # Navigation Uncertainty Category -                 INT
-    seen_pos = None      # Seconds since last position field update -        DOUBLE
+    seen_pos = None     # Seconds since last position field update -        DOUBLE
     altitude = None     # Altitude decoded from CPR -                       INT
     vertRate = None     # vertical climb rate -                             INT
     track = None        # unsure -                                          INT
@@ -93,6 +100,19 @@ class Aircraft:         # [quick description] -                             [VAR
         self.seen = seenIN
         self.rssi = rssiIN
 
+    def addDistance(self, dist):
+        self.current_distance = dist
+
+    def addAbsBearing(self, bear):
+        self.absolute_bearing = bear
+
+    def assignZone(self, location):
+        #TODO
+        if self.altitude >= location.alt:
+            self.zone = 1
+        if self.altitude < location.alt:
+            self.zone = 2
+
     def update(self, latIN, lonIN, NUCpIN, seen_posIN, altitudeIN, vertRateIN, trackIN, speedIN, categoryIN, mlatIN, tisbIN, messagesIN, seenIN, rssiIN):
         self.lat = latIN
         self.lon = lonIN
@@ -109,7 +129,7 @@ class Aircraft:         # [quick description] -                             [VAR
         self.seen = seenIN
         self.rssi = rssiIN
 
-
+# THIS IS A METHOD TO PARSE THROUGH A JSON FILE
 class JSONparser:
     def __init__(self):
         with open('aircrafts.json') as json_file:
@@ -162,12 +182,40 @@ class JSONparser:
                 msgCount = p['messages']
                 lastSeen = p['seen']
                 rssiVal = p['rssi']
-                for x in nearby_aircrafts:
-                    if x.hex == hexVal:
-                        x.update(latVal, longVal, NUCpVal, seen_posVal, altVal, vert_rateVal, trackVal, velocity, catVal, mlatArr, tisbArr, msgCount, lastSeen, rssiVal)
-                        return None
+                # for x in nearby_aircrafts:
+                #     if x.hex == hexVal:
+                #         x.update(latVal, longVal, NUCpVal, seen_posVal, altVal, vert_rateVal, trackVal, velocity, catVal, mlatArr, tisbArr, msgCount, lastSeen, rssiVal)
+                #         return None
                 tempAircraft = Aircraft(hexVal, flightStr, latVal, longVal, NUCpVal, seen_posVal, altVal, vert_rateVal, trackVal, velocity, catVal, mlatArr, tisbArr, msgCount, lastSeen, rssiVal)
-                nearby_aircrafts.append(tempAircraft)
+                tempArr = []
+                tempArr.append(tempAircraft)
+                nearby_aircrafts = tempArr
+
+def calculate_distance(origin, destination):
+    lat1, lon1 = origin
+    lat2, lon2 = destination
+    earth_radius = 6371 # km
+
+    dlat = math.radians(lat2-lat1)
+    dlon = math.radians(lon2-lon1)
+    a = math.sin(dlat/2) * math.sin(dlat/2) + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2) * math.sin(dlon/2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    d = earth_radius * c
+
+    return d
+
+def calculate_bearing(origin, destination):
+    lat1, lon1 = origin
+    lat2, lon2 = destination
+
+    brng = Geodesic.WGS84.Inverse(lat1, lon1, lat2, lon2)['azi1']
+    return brng
+
+def getManeuver(aircraft):
+    if aircraft.zone == 1:
+        maneuver = "Descend. Descend."
+    if aircraft.zone == 2:
+        maneuver = "Climb. Climb."
 
 
 if __name__ == '__main__':
@@ -195,7 +243,7 @@ if __name__ == '__main__':
             errorVertVel = gpsd.fix.epc  # error estimate of climb/sink in meters per second (Vertical Velocity error)
            # errorHor = gpsd.fix.eph  # estimated horizontal error in meters - WEIRD ERROR
             errorVert = gpsd.fix.epv  # estimated vertical error in meters
-			
+
             print
             print (' GPS reading')
             print ('----------------------------------------')
@@ -214,20 +262,35 @@ if __name__ == '__main__':
             print ('mode        ' , gpsd.fix.mode) #NMEA mode (not sure what this represents)
             print
             print ('sats        ' , gpsd.satellites)
- 
+
             locationHistory.append(Location(lat, lon, t, alt, vel, head, climbRate, errorLat, errorLong, errorHorVel, errorVertVel, None, errorVert))
 
             if len(locationHistory) > 10:
                 locationHistory.pop(0)
 
             JSONparser()
+
             for x in nearby_aircrafts:
-                if x.seen >= 300:
-                    nearby_aircrafts.remove(x)
-			# TODO - Search through JSON - if aircraft no longer exists then dump1090 has gotten rid of it and the lastSeen value wont increment through Aircraft.update() so this case will never be 				  reached
+                x.addDistance(calculate_distance((x.lat, x.long), (lat, lon)))
+                x.addAbsBearing(calculate_bearing((x.lat, x.long), (lat, lon)))
+                if x.current_distance < warning_radius:
+                    threats.append(x)
+
+            min_dist = None
+            for y in threats:
+                if (min_dist is None) or (min_dist > y.current_distance):
+                    min_dist = y
+
+            min_dist.assignZone()
+            getManeuver(min_dist)
 
             # TODO - Assign aircraft radius, calculate angle and distance between our aircraft and nearby, determine if they are within our radius, and then call method for situation cases
-
+            #
+            # TODO - FUTURE IMPROVEMENTS:
+            #       - Find out how to get relative bearing
+            #       - Weight aircraft based on their speed in the direction of our craft - faster means quicker time to collision
+            #       - Account for current altitude - cannot execute downwards evasive maneuver if too close to ground
+            #       - Is heading based on physical direction of GPS or is it calculated from past locations?
 
     except(KeyboardInterrupt, SystemExit):  # when you press ctrl+c
 
